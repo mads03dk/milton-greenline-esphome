@@ -1,0 +1,2323 @@
+# ============================================================================
+# MILTON GREENLINE - OVERVÅGNING + VALGTE BETJENINGSFUNKTIONER
+# ============================================================================
+#
+# LAVET AF: Mads03DK
+# GitHub: https://github.com/Mads03DK/esphome-milton-greenline
+#
+# Slave 1, holding-registers.
+# Læse-/skriverettigheder og grænser kan variere mellem modeller/firmware.
+# Dette er et uofficielt community-projekt, ikke en fabrikantintegration.
+# Kun S1/S11/T1/T2/T3/K1 er gjort skrivbare.
+# Talgrænserne nedenfor er VALGTE HA-betjeningsgrænser, ikke fabrikantens grænser.
+# 40..60 °C brugsvand/genopvarmning; 20..45 °C varme/kurve; trin 1 °C.
+# 45 °C følger den senest aflæste maksimale fremløbsgrænse, men er ikke en
+# dynamisk spærring: hvis anlægsgrænser ændres, skal betjeningsgrænser revurderes.
+# Varmesætpunkt T2 bruges ved deaktiveret varmekurve. K1 retter kun vandpunkter.
+# Råsensorer bevares også for skrivbare registre, så readback kan kontrolleres.
+# De forskellige entity-typer kan derfor læse samme register; det er bevidst.
+# Standalone config: netværk, krypteret API og OTA bruger lokale secrets.yaml.
+# ============================================================================
+
+substitutions:
+  devicename: "miltongreenline"
+  milton_pressure_scale: "0.1"
+  milton_current_scale: "0.1"
+
+esphome:
+  name: ${devicename}
+  friendly_name: Milton Greenline-varmepumpe
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+
+# Seriel logger er deaktiveret; logs er tilgængelige via API/netværk.
+logger:
+  level: INFO
+  baud_rate: 0
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+uart:
+  - id: milton_rs485_uart
+    tx_pin: GPIO17
+    rx_pin: GPIO18
+    flow_control_pin: GPIO21
+    baud_rate: 19200
+    data_bits: 8
+    stop_bits: 1
+    parity: NONE
+    # Fejlsøgning: sæt logger.level til DEBUG og fjern # fra blokken nedenfor.
+    # debug:
+    #   direction: BOTH
+    #   dummy_receiver: false
+    #   after:
+    #     timeout: 50ms
+    #   sequence:
+    #     - lambda: UARTDebug::log_hex(direction, bytes, ' ');
+
+modbus:
+  - id: milton_modbus
+    uart_id: milton_rs485_uart
+    send_wait_time: 1000ms
+
+modbus_controller:
+  - id: milton
+    address: 0x01
+    modbus_id: milton_modbus
+    update_interval: 60s
+    max_cmd_retries: 3
+
+sensor:
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R000 rå - Varmepumpe tilstand
+    id: milton_raw_id_1
+    address: 0
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_heatpump_enable_state
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R001 rå - Softwareversion lav blok
+    id: milton_raw_id_2
+    address: 1
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R002 rå - Databaseversion lav blok
+    id: milton_raw_id_3
+    address: 2
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R026 rå - Stopdifferens varme og koeling
+    id: milton_raw_id_27
+    address: 26
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_27
+  - platform: template
+    name: Milton Stopdifferens varme og koeling (læst indstilling)
+    id: milton_setting_id_27
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_27).has_state() || !std::isfinite(id(milton_raw_id_27).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_27).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R027 rå - Genstartdifferens varme og koeling
+    id: milton_raw_id_28
+    address: 27
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_28
+  - platform: template
+    name: Milton Genstartdifferens varme og koeling (læst indstilling)
+    id: milton_setting_id_28
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_28).has_state() || !std::isfinite(id(milton_raw_id_28).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_28).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R028 rå - Differens for kompressorreduktion
+    id: milton_raw_id_29
+    address: 28
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_29
+  - platform: template
+    name: Milton Differens for kompressorreduktion (læst indstilling)
+    id: milton_setting_id_29
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_29).has_state() || !std::isfinite(id(milton_raw_id_29).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_29).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R029 rå - Saetpunkt koeling
+    id: milton_raw_id_30
+    address: 29
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_30
+  - platform: template
+    name: Milton Saetpunkt koeling (læst indstilling)
+    id: milton_setting_id_30
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_30).has_state() || !std::isfinite(id(milton_raw_id_30).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_30).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R030 rå - Varmekurve VK1 aktiveret
+    id: milton_raw_id_31
+    address: 30
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R031 rå - Varmekurve VK1 udetemperatur punkt 1
+    id: milton_raw_id_32
+    address: 31
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_32
+  - platform: template
+    name: Milton Varmekurve VK1 udetemperatur punkt 1 (læst indstilling)
+    id: milton_setting_id_32
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_32).has_state() || !std::isfinite(id(milton_raw_id_32).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_32).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R032 rå - Varmekurve VK1 udetemperatur punkt 2
+    id: milton_raw_id_33
+    address: 32
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_33
+  - platform: template
+    name: Milton Varmekurve VK1 udetemperatur punkt 2 (læst indstilling)
+    id: milton_setting_id_33
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_33).has_state() || !std::isfinite(id(milton_raw_id_33).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_33).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R033 rå - Varmekurve VK1 udetemperatur punkt 3
+    id: milton_raw_id_34
+    address: 33
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_34
+  - platform: template
+    name: Milton Varmekurve VK1 udetemperatur punkt 3 (læst indstilling)
+    id: milton_setting_id_34
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_34).has_state() || !std::isfinite(id(milton_raw_id_34).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_34).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R034 rå - Varmekurve VK1 udetemperatur punkt 4
+    id: milton_raw_id_35
+    address: 34
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_35
+  - platform: template
+    name: Milton Varmekurve VK1 udetemperatur punkt 4 (læst indstilling)
+    id: milton_setting_id_35
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_35).has_state() || !std::isfinite(id(milton_raw_id_35).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_35).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R035 rå - Varmekurve VK1 udetemperatur punkt 5
+    id: milton_raw_id_36
+    address: 35
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_36
+  - platform: template
+    name: Milton Varmekurve VK1 udetemperatur punkt 5 (læst indstilling)
+    id: milton_setting_id_36
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_36).has_state() || !std::isfinite(id(milton_raw_id_36).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_36).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R036 rå - Varmekurve VK1 vandtemperatur punkt 1
+    id: milton_raw_id_37
+    address: 36
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_37
+  - platform: template
+    name: Milton Varmekurve VK1 vandtemperatur punkt 1 (læst indstilling)
+    id: milton_setting_id_37
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_37).has_state() || !std::isfinite(id(milton_raw_id_37).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_37).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R037 rå - Varmekurve VK1 vandtemperatur punkt 2
+    id: milton_raw_id_38
+    address: 37
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_38
+  - platform: template
+    name: Milton Varmekurve VK1 vandtemperatur punkt 2 (læst indstilling)
+    id: milton_setting_id_38
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_38).has_state() || !std::isfinite(id(milton_raw_id_38).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_38).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R038 rå - Varmekurve VK1 vandtemperatur punkt 3
+    id: milton_raw_id_39
+    address: 38
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_39
+  - platform: template
+    name: Milton Varmekurve VK1 vandtemperatur punkt 3 (læst indstilling)
+    id: milton_setting_id_39
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_39).has_state() || !std::isfinite(id(milton_raw_id_39).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_39).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R039 rå - Varmekurve VK1 vandtemperatur punkt 4
+    id: milton_raw_id_40
+    address: 39
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_40
+  - platform: template
+    name: Milton Varmekurve VK1 vandtemperatur punkt 4 (læst indstilling)
+    id: milton_setting_id_40
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_40).has_state() || !std::isfinite(id(milton_raw_id_40).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_40).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R040 rå - Varmekurve VK1 vandtemperatur punkt 5
+    id: milton_raw_id_41
+    address: 40
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_41
+  - platform: template
+    name: Milton Varmekurve VK1 vandtemperatur punkt 5 (læst indstilling)
+    id: milton_setting_id_41
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_41).has_state() || !std::isfinite(id(milton_raw_id_41).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_41).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R041 rå - Rumtemperaturens indflydelse
+    id: milton_raw_id_42
+    address: 41
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R042 rå - Ideal rumtemperatur opvarmning
+    id: milton_raw_id_43
+    address: 42
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_43
+  - platform: template
+    name: Milton Ideal rumtemperatur opvarmning (læst indstilling)
+    id: milton_setting_id_43
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_43).has_state() || !std::isfinite(id(milton_raw_id_43).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_43).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R043 rå - Ideal rumtemperatur koeling
+    id: milton_raw_id_44
+    address: 43
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_44
+  - platform: template
+    name: Milton Ideal rumtemperatur koeling (læst indstilling)
+    id: milton_setting_id_44
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_44).has_state() || !std::isfinite(id(milton_raw_id_44).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_44).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R044 rå - Saetpunkt varme uden varmekurve
+    id: milton_raw_id_45
+    address: 44
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_45
+  - platform: template
+    name: Milton Saetpunkt varme uden varmekurve (læst indstilling)
+    id: milton_setting_id_45
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_45).has_state() || !std::isfinite(id(milton_raw_id_45).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_45).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R045 rå - Maksimal fremløbstemperatur
+    id: milton_raw_id_46
+    address: 45
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_46
+  - platform: template
+    name: Milton Maksimal fremløbstemperatur (læst indstilling)
+    id: milton_setting_id_46
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_46).has_state() || !std::isfinite(id(milton_raw_id_46).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_46).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R046 rå - Minimal fremløbstemperatur
+    id: milton_raw_id_47
+    address: 46
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_47
+  - platform: template
+    name: Milton Minimal fremløbstemperatur (læst indstilling)
+    id: milton_setting_id_47
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_47).has_state() || !std::isfinite(id(milton_raw_id_47).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_47).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R047 rå - Legionellafunktion
+    id: milton_raw_id_48
+    address: 47
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R048 rå - Legionellainterval
+    id: milton_raw_id_49
+    address: 48
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_49
+  - platform: template
+    name: Milton Legionellainterval (læst indstilling)
+    id: milton_setting_id_49
+    unit_of_measurement: d
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_49).has_state() || !std::isfinite(id(milton_raw_id_49).state)) return NAN;
+      return id(milton_raw_id_49).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R049 rå - Legionellasaetpunkt
+    id: milton_raw_id_50
+    address: 49
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_50
+  - platform: template
+    name: Milton Legionellasaetpunkt (læst indstilling)
+    id: milton_setting_id_50
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_50).has_state() || !std::isfinite(id(milton_raw_id_50).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_50).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R050 rå - Legionellavarighed
+    id: milton_raw_id_51
+    address: 50
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_51
+  - platform: template
+    name: Milton Legionellavarighed (læst indstilling)
+    id: milton_setting_id_51
+    unit_of_measurement: min
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_51).has_state() || !std::isfinite(id(milton_raw_id_51).state)) return NAN;
+      return id(milton_raw_id_51).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R051 rå - Legionella sluttid raakode
+    id: milton_raw_id_52
+    address: 51
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R052 rå - Ferieindstilling
+    id: milton_raw_id_53
+    address: 52
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R053 rå - Brugsvandsreduktion ferie
+    id: milton_raw_id_54
+    address: 53
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_54
+  - platform: template
+    name: Milton Brugsvandsreduktion ferie (læst indstilling)
+    id: milton_setting_id_54
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_54).has_state() || !std::isfinite(id(milton_raw_id_54).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_54).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R054 rå - Systemtemperaturreduktion ferie
+    id: milton_raw_id_55
+    address: 54
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_55
+  - platform: template
+    name: Milton Systemtemperaturreduktion ferie (læst indstilling)
+    id: milton_setting_id_55
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_55).has_state() || !std::isfinite(id(milton_raw_id_55).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_55).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R061 rå - Startfaktor ekstern varmekilde
+    id: milton_raw_id_62
+    address: 61
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R062 rå - Laeseinterval brugsvandstemperatur
+    id: milton_raw_id_63
+    address: 62
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_63
+  - platform: template
+    name: Milton Laeseinterval brugsvandstemperatur (læst indstilling)
+    id: milton_setting_id_63
+    unit_of_measurement: min
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_63).has_state() || !std::isfinite(id(milton_raw_id_63).state)) return NAN;
+      return id(milton_raw_id_63).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R064 rå - Saetpunkt brugsvand
+    id: milton_raw_id_65
+    address: 64
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_65
+  - platform: template
+    name: Milton Saetpunkt brugsvand (læst indstilling)
+    id: milton_setting_id_65
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_65).has_state() || !std::isfinite(id(milton_raw_id_65).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_65).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R065 rå - Differens brugsvand
+    id: milton_raw_id_66
+    address: 65
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_66
+  - platform: template
+    name: Milton Differens brugsvand (læst indstilling)
+    id: milton_setting_id_66
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_66).has_state() || !std::isfinite(id(milton_raw_id_66).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_66).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R066 rå - Prioritetsskift brugsvand
+    id: milton_raw_id_67
+    address: 66
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R067 rå - Udetemperatur for vekslende prioritet
+    id: milton_raw_id_68
+    address: 67
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_68
+  - platform: template
+    name: Milton Udetemperatur for vekslende prioritet (læst indstilling)
+    id: milton_setting_id_68
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_68).has_state() || !std::isfinite(id(milton_raw_id_68).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_68).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R068 rå - Minimum ladetid brugsvand
+    id: milton_raw_id_69
+    address: 68
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_69
+  - platform: template
+    name: Milton Minimum ladetid brugsvand (læst indstilling)
+    id: milton_setting_id_69
+    unit_of_measurement: min
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_69).has_state() || !std::isfinite(id(milton_raw_id_69).state)) return NAN;
+      return id(milton_raw_id_69).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R069 rå - Maksimum ladetid brugsvand
+    id: milton_raw_id_70
+    address: 69
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_70
+  - platform: template
+    name: Milton Maksimum ladetid brugsvand (læst indstilling)
+    id: milton_setting_id_70
+    unit_of_measurement: min
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_70).has_state() || !std::isfinite(id(milton_raw_id_70).state)) return NAN;
+      return id(milton_raw_id_70).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R070 rå - Tilladt systemtemperaturvariation
+    id: milton_raw_id_71
+    address: 70
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_71
+  - platform: template
+    name: Milton Tilladt systemtemperaturvariation (læst indstilling)
+    id: milton_setting_id_71
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_71).has_state() || !std::isfinite(id(milton_raw_id_71).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_71).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R071 rå - Vekslende prioritet brugsvandsbackup
+    id: milton_raw_id_72
+    address: 71
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R072 rå - Varmtvandsbeholderfunktion
+    id: milton_raw_id_73
+    address: 72
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R073 rå - Genopvarmningsfunktion
+    id: milton_raw_id_74
+    address: 73
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R074 rå - Saetpunkt genopvarmning
+    id: milton_raw_id_75
+    address: 74
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_75
+  - platform: template
+    name: Milton Saetpunkt genopvarmning (læst indstilling)
+    id: milton_setting_id_75
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_75).has_state() || !std::isfinite(id(milton_raw_id_75).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_75).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R075 rå - Startdifferens genopvarmning
+    id: milton_raw_id_76
+    address: 75
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_76
+  - platform: template
+    name: Milton Startdifferens genopvarmning (læst indstilling)
+    id: milton_setting_id_76
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_76).has_state() || !std::isfinite(id(milton_raw_id_76).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_76).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R076 rå - Brugsvandsstart soendag raakode
+    id: milton_raw_id_77
+    address: 76
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R077 rå - Brugsvandsstart mandag raakode
+    id: milton_raw_id_78
+    address: 77
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R078 rå - Brugsvandsstart tirsdag raakode
+    id: milton_raw_id_79
+    address: 78
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R079 rå - Brugsvandsstart onsdag raakode
+    id: milton_raw_id_80
+    address: 79
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R080 rå - Brugsvandsstart torsdag raakode
+    id: milton_raw_id_81
+    address: 80
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R081 rå - Brugsvandsstart fredag raakode
+    id: milton_raw_id_82
+    address: 81
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R082 rå - Brugsvandsstart loerdag raakode
+    id: milton_raw_id_83
+    address: 82
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R083 rå - Genopvarmningsstart soendag raakode
+    id: milton_raw_id_84
+    address: 83
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R084 rå - Genopvarmningsstart mandag raakode
+    id: milton_raw_id_85
+    address: 84
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R085 rå - Genopvarmningsstart tirsdag raakode
+    id: milton_raw_id_86
+    address: 85
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R086 rå - Genopvarmningsstart onsdag raakode
+    id: milton_raw_id_87
+    address: 86
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R087 rå - Genopvarmningsstart torsdag raakode
+    id: milton_raw_id_88
+    address: 87
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R088 rå - Genopvarmningsstart fredag raakode
+    id: milton_raw_id_89
+    address: 88
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R089 rå - Genopvarmningsstart loerdag raakode
+    id: milton_raw_id_90
+    address: 89
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R101 rå - Reduceret vaerdi varmedrift
+    id: milton_raw_id_102
+    address: 101
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R102 rå - Temperaturhaevning eller reduktion
+    id: milton_raw_id_103
+    address: 102
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_103
+  - platform: template
+    name: Milton Temperaturhaevning eller reduktion (læst indstilling)
+    id: milton_setting_id_103
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_103).has_state() || !std::isfinite(id(milton_raw_id_103).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_103).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R103 rå - Reduceret saetpunkt timer soendag raakode
+    id: milton_raw_id_104
+    address: 103
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R104 rå - Reduceret saetpunkt timer mandag raakode
+    id: milton_raw_id_105
+    address: 104
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R105 rå - Reduceret saetpunkt timer tirsdag raakode
+    id: milton_raw_id_106
+    address: 105
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R106 rå - Reduceret saetpunkt timer onsdag raakode
+    id: milton_raw_id_107
+    address: 106
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R107 rå - Reduceret saetpunkt timer torsdag raakode
+    id: milton_raw_id_108
+    address: 107
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R108 rå - Reduceret saetpunkt timer fredag raakode
+    id: milton_raw_id_109
+    address: 108
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R109 rå - Reduceret saetpunkt timer loerdag raakode
+    id: milton_raw_id_110
+    address: 109
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R110 rå - Lydsvag drift
+    id: milton_raw_id_111
+    address: 110
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R111 rå - Tilladt temperaturdifference lydsvag drift
+    id: milton_raw_id_112
+    address: 111
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_setting_id_112
+  - platform: template
+    name: Milton Tilladt temperaturdifference lydsvag drift (læst indstilling)
+    id: milton_setting_id_112
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_112).has_state() || !std::isfinite(id(milton_raw_id_112).state)) return NAN;
+      return (int16_t) (uint16_t) id(milton_raw_id_112).state;
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R112 rå - Natdrift timer soendag raakode
+    id: milton_raw_id_113
+    address: 112
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R113 rå - Natdrift timer mandag raakode
+    id: milton_raw_id_114
+    address: 113
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R114 rå - Natdrift timer tirsdag raakode
+    id: milton_raw_id_115
+    address: 114
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R115 rå - Natdrift timer onsdag raakode
+    id: milton_raw_id_116
+    address: 115
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R116 rå - Natdrift timer torsdag raakode
+    id: milton_raw_id_117
+    address: 116
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R117 rå - Natdrift timer fredag raakode
+    id: milton_raw_id_118
+    address: 117
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R118 rå - Natdrift timer loerdag raakode
+    id: milton_raw_id_119
+    address: 118
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R501 rå - Softwareversion hoej blok
+    id: milton_raw_id_502
+    address: 501
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R503 rå - Databaseversion hoej blok
+    id: milton_raw_id_504
+    address: 503
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R505 rå - Fremløbstemperatur Tuo
+    id: milton_raw_id_506
+    address: 505
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_supply_temperature_tuo
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R506 rå - Returtemperatur Tui
+    id: milton_raw_id_507
+    address: 506
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_return_temperature_tui
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R507 rå - Spiraltemperatur Tup
+    id: milton_raw_id_508
+    address: 507
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_spiral_temperature_tup
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R508 rå - Brugsvandstemperatur TW
+    id: milton_raw_id_509
+    address: 508
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_dhw_temperature_tw
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R509 rå - Buffertemperatur TC
+    id: milton_raw_id_510
+    address: 509
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_buffer_temperature_tc
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R510 rå - Fremløbstemperatur kreds 1 TV1
+    id: milton_raw_id_511
+    address: 510
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_circuit_1_supply_temperature_tv1
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R514 rå - Vandflowstatus
+    id: milton_raw_id_515
+    address: 514
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R515 rå - Kompressorfrekvens
+    id: milton_raw_id_516
+    address: 515
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_compressor_speed
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R516 rå - Ekspansionsventil aabning
+    id: milton_raw_id_517
+    address: 516
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_expansion_valve_raw
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R517 rå - Gennemsnitlig udetemperatur 1 time
+    id: milton_raw_id_518
+    address: 517
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_average_outdoor_temperature_1h
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R518 rå - Gennemsnitlig udetemperatur 4 timer
+    id: milton_raw_id_519
+    address: 518
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_average_outdoor_temperature_4h
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R519 rå - Gennemsnitlig udetemperatur 24 timer
+    id: milton_raw_id_520
+    address: 519
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_average_outdoor_temperature_24h
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R521 rå - Hoejtryk Pd
+    id: milton_raw_id_522
+    address: 521
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_high_pressure
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R522 rå - Lavtryk Ps
+    id: milton_raw_id_523
+    address: 522
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_low_pressure
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R523 rå - Trykgastemperatur Td
+    id: milton_raw_id_524
+    address: 523
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_discharge_temperature_td
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R524 rå - Sugetemperatur Ts
+    id: milton_raw_id_525
+    address: 524
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_suction_temperature_ts
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R525 rå - Udendoers spiraltemperatur Tp
+    id: milton_raw_id_526
+    address: 525
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_outdoor_coil_temperature_tp
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R526 rå - Ventilator 1
+    id: milton_raw_id_527
+    address: 526
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_fan_speed_1
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R527 rå - Ventilator 2
+    id: milton_raw_id_528
+    address: 527
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_fan_speed_2
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R528 rå - Stroem udendoersenhed
+    id: milton_raw_id_529
+    address: 528
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_outdoor_unit_current
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton R529 rå - Spaending
+    id: milton_raw_id_530
+    address: 529
+    register_type: holding
+    value_type: U_WORD
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    disabled_by_default: true
+    on_value:
+    - component.update: milton_voltage
+  - platform: template
+    name: Milton Fremløbstemperatur Tuo
+    id: milton_supply_temperature_tuo
+    unit_of_measurement: °C
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_506).has_state() || !std::isfinite(id(milton_raw_id_506).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_506).state;
+      const int16_t value = (int16_t) raw;
+      if (value == -990) return NAN;  // Panelets -99.0: ikke en gyldig temperatur.
+      return value * 0.1f;
+    device_class: temperature
+    on_value:
+    - component.update: milton_water_delta_t
+  - platform: template
+    name: Milton Returtemperatur Tui
+    id: milton_return_temperature_tui
+    unit_of_measurement: °C
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_507).has_state() || !std::isfinite(id(milton_raw_id_507).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_507).state;
+      const int16_t value = (int16_t) raw;
+      if (value == -990) return NAN;  // Panelets -99.0: ikke en gyldig temperatur.
+      return value * 0.1f;
+    device_class: temperature
+    on_value:
+    - component.update: milton_water_delta_t
+  - platform: template
+    name: Milton Spiraltemperatur Tup
+    id: milton_spiral_temperature_tup
+    unit_of_measurement: °C
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_508).has_state() || !std::isfinite(id(milton_raw_id_508).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_508).state;
+      const int16_t value = (int16_t) raw;
+      if (value == -990) return NAN;  // Panelets -99.0: ikke en gyldig temperatur.
+      return value * 0.1f;
+    device_class: temperature
+  - platform: template
+    name: Milton Brugsvandstemperatur TW
+    id: milton_dhw_temperature_tw
+    unit_of_measurement: °C
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_509).has_state() || !std::isfinite(id(milton_raw_id_509).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_509).state;
+      const int16_t value = (int16_t) raw;
+      if (value == -990) return NAN;  // Panelets -99.0: ikke en gyldig temperatur.
+      return value * 0.1f;
+    device_class: temperature
+  - platform: template
+    name: Milton Buffertemperatur TC
+    id: milton_buffer_temperature_tc
+    unit_of_measurement: °C
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_510).has_state() || !std::isfinite(id(milton_raw_id_510).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_510).state;
+      const int16_t value = (int16_t) raw;
+      if (value == -990) return NAN;  // Panelets -99.0: ikke en gyldig temperatur.
+      return value * 0.1f;
+    device_class: temperature
+  - platform: template
+    name: Milton Fremløbstemperatur kreds 1 TV1
+    id: milton_circuit_1_supply_temperature_tv1
+    unit_of_measurement: °C
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_511).has_state() || !std::isfinite(id(milton_raw_id_511).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_511).state;
+      const int16_t value = (int16_t) raw;
+      if (value == -990) return NAN;  // Panelets -99.0: ikke en gyldig temperatur.
+      return value * 0.1f;
+    device_class: temperature
+  - platform: template
+    name: Milton Gennemsnitlig udetemperatur 1 time
+    id: milton_average_outdoor_temperature_1h
+    unit_of_measurement: °C
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_518).has_state() || !std::isfinite(id(milton_raw_id_518).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_518).state;
+      const int16_t value = (int16_t) raw;
+      if (value == -990) return NAN;  // Panelets -99.0: ikke en gyldig temperatur.
+      return value * 0.1f;
+    device_class: temperature
+  - platform: template
+    name: Milton Gennemsnitlig udetemperatur 4 timer
+    id: milton_average_outdoor_temperature_4h
+    unit_of_measurement: °C
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_519).has_state() || !std::isfinite(id(milton_raw_id_519).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_519).state;
+      const int16_t value = (int16_t) raw;
+      if (value == -990) return NAN;  // Panelets -99.0: ikke en gyldig temperatur.
+      return value * 0.1f;
+    device_class: temperature
+  - platform: template
+    name: Milton Gennemsnitlig udetemperatur 24 timer
+    id: milton_average_outdoor_temperature_24h
+    unit_of_measurement: °C
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_520).has_state() || !std::isfinite(id(milton_raw_id_520).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_520).state;
+      const int16_t value = (int16_t) raw;
+      if (value == -990) return NAN;  // Panelets -99.0: ikke en gyldig temperatur.
+      return value * 0.1f;
+    device_class: temperature
+  - platform: template
+    name: Milton Trykgastemperatur Td
+    id: milton_discharge_temperature_td
+    unit_of_measurement: °C
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_524).has_state() || !std::isfinite(id(milton_raw_id_524).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_524).state;
+      const int16_t value = (int16_t) raw;
+      if (value == -990) return NAN;  // Panelets -99.0: ikke en gyldig temperatur.
+      return value * 0.1f;
+    device_class: temperature
+  - platform: template
+    name: Milton Sugetemperatur Ts
+    id: milton_suction_temperature_ts
+    unit_of_measurement: °C
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_525).has_state() || !std::isfinite(id(milton_raw_id_525).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_525).state;
+      const int16_t value = (int16_t) raw;
+      if (value == -990) return NAN;  // Panelets -99.0: ikke en gyldig temperatur.
+      return value * 0.1f;
+    device_class: temperature
+  - platform: template
+    name: Milton Udendørs spiraltemperatur Tp
+    id: milton_outdoor_coil_temperature_tp
+    unit_of_measurement: °C
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_526).has_state() || !std::isfinite(id(milton_raw_id_526).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_526).state;
+      const int16_t value = (int16_t) raw;
+      if (value == -990) return NAN;  // Panelets -99.0: ikke en gyldig temperatur.
+      return value * 0.1f;
+    device_class: temperature
+  - platform: template
+    name: Milton Kompressorfrekvens
+    id: milton_compressor_speed
+    unit_of_measurement: Hz
+    accuracy_decimals: 0
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_516).has_state() || !std::isfinite(id(milton_raw_id_516).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_516).state;
+      const uint16_t value = raw;
+      return value * 1.0f;
+    device_class: frequency
+  - platform: template
+    name: Milton Ventilator 1
+    id: milton_fan_speed_1
+    unit_of_measurement: rpm
+    accuracy_decimals: 0
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_527).has_state() || !std::isfinite(id(milton_raw_id_527).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_527).state;
+      const uint16_t value = raw;
+      return value * 1.0f;
+  - platform: template
+    name: Milton Ventilator 2
+    id: milton_fan_speed_2
+    unit_of_measurement: rpm
+    accuracy_decimals: 0
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_528).has_state() || !std::isfinite(id(milton_raw_id_528).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_528).state;
+      const uint16_t value = raw;
+      return value * 1.0f;
+  - platform: template
+    name: Milton Spænding
+    id: milton_voltage
+    unit_of_measurement: V
+    accuracy_decimals: 0
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_530).has_state() || !std::isfinite(id(milton_raw_id_530).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_530).state;
+      const uint16_t value = raw;
+      return value * 1.0f;
+    device_class: voltage
+    on_value:
+    - component.update: milton_estimated_power
+  - platform: template
+    name: Milton Højtryk Pd
+    id: milton_high_pressure
+    unit_of_measurement: bar
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_522).has_state() || !std::isfinite(id(milton_raw_id_522).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_522).state;
+      const uint16_t value = raw;
+      return value * ${milton_pressure_scale};
+    device_class: pressure
+  - platform: template
+    name: Milton Lavtryk Ps
+    id: milton_low_pressure
+    unit_of_measurement: bar
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_523).has_state() || !std::isfinite(id(milton_raw_id_523).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_523).state;
+      const uint16_t value = raw;
+      return value * ${milton_pressure_scale};
+    device_class: pressure
+  - platform: template
+    name: Milton Strøm udendørsenhed
+    id: milton_outdoor_unit_current
+    unit_of_measurement: A
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_529).has_state() || !std::isfinite(id(milton_raw_id_529).state)) return NAN;
+      const uint16_t raw = (uint16_t) id(milton_raw_id_529).state;
+      const uint16_t value = raw;
+      return value * ${milton_current_scale};
+    device_class: current
+    on_value:
+    - component.update: milton_estimated_power
+  # Overslag: U*I antager effektfaktor 1. Uden måling af aktiv effekt er kWh ikke præcist.
+  - platform: template
+    name: Milton Estimeret effektforbrug
+    id: milton_estimated_power
+    unit_of_measurement: W
+    accuracy_decimals: 0
+    device_class: power
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      const float current = id(milton_outdoor_unit_current).state;
+      const float voltage = id(milton_voltage).state;
+      if (!std::isfinite(current) || !std::isfinite(voltage)) return NAN;
+      return current * voltage;
+  - platform: integration
+    name: Milton Estimeret energiforbrug
+    sensor: milton_estimated_power
+    time_unit: h
+    integration_method: trapezoid
+    accuracy_decimals: 2
+    device_class: energy
+    state_class: total_increasing
+    unit_of_measurement: kWh
+    filters:
+      - multiply: 0.001
+  - platform: template
+    name: Milton Ekspansionsventil åbning (råtrin, enhed uafklaret)
+    id: milton_expansion_valve_raw
+    accuracy_decimals: 0
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_517).has_state()) return NAN;
+      return id(milton_raw_id_517).state;
+  - platform: template
+    name: Milton Temperaturforskel fremløb minus retur
+    id: milton_water_delta_t
+    unit_of_measurement: K
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      const float supply = id(milton_supply_temperature_tuo).state;
+      const float ret = id(milton_return_temperature_tui).state;
+      if (!std::isfinite(supply) || !std::isfinite(ret)) return NAN;
+      return supply - ret;
+  - platform: wifi_signal
+    name: WiFi Signal Sensor
+    id: sensor_wifi_signal_1
+    update_interval: 60s
+    entity_category: diagnostic
+  - platform: uptime
+    name: Milton ESP oppetid
+    id: milton_uptime
+    entity_category: diagnostic
+  - platform: template
+    name: Milton Varmepumpe tilstand (råkode)
+    id: milton_heatpump_enable_state
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      if (!id(milton_raw_id_1).has_state()) return NAN;
+      return id(milton_raw_id_1).state;
+
+binary_sensor:
+  - platform: template
+    name: Milton Varmekurve VK1 (læst status)
+    id: milton_binary_id_31
+    entity_category: diagnostic
+    lambda: |-
+      if (!id(milton_raw_id_31).has_state()) return {};
+      const float x = id(milton_raw_id_31).state;
+      if (x == 0.0f) return false;
+      if (x == 1.0f) return true;
+      return {};  // Ingen ny status; tidligere status kan blive stående.
+  - platform: template
+    name: Milton Rumtemperaturens indflydelse (læst status)
+    id: milton_binary_id_42
+    entity_category: diagnostic
+    lambda: |-
+      if (!id(milton_raw_id_42).has_state()) return {};
+      const float x = id(milton_raw_id_42).state;
+      if (x == 0.0f) return false;
+      if (x == 1.0f) return true;
+      return {};  // Ingen ny status; tidligere status kan blive stående.
+  - platform: template
+    name: Milton Legionellafunktion (læst status)
+    id: milton_binary_id_48
+    entity_category: diagnostic
+    lambda: |-
+      if (!id(milton_raw_id_48).has_state()) return {};
+      const float x = id(milton_raw_id_48).state;
+      if (x == 0.0f) return false;
+      if (x == 1.0f) return true;
+      return {};  // Ingen ny status; tidligere status kan blive stående.
+  - platform: template
+    name: Milton Ferieindstilling (læst status)
+    id: milton_binary_id_53
+    entity_category: diagnostic
+    lambda: |-
+      if (!id(milton_raw_id_53).has_state()) return {};
+      const float x = id(milton_raw_id_53).state;
+      if (x == 0.0f) return false;
+      if (x == 1.0f) return true;
+      return {};  // Ingen ny status; tidligere status kan blive stående.
+  - platform: template
+    name: Milton Prioritetsskift brugsvand (læst status)
+    id: milton_binary_id_67
+    entity_category: diagnostic
+    lambda: |-
+      if (!id(milton_raw_id_67).has_state()) return {};
+      const float x = id(milton_raw_id_67).state;
+      if (x == 0.0f) return false;
+      if (x == 1.0f) return true;
+      return {};  // Ingen ny status; tidligere status kan blive stående.
+  - platform: template
+    name: Milton Vekslende prioritet brugsvandsbackup (læst status)
+    id: milton_binary_id_72
+    entity_category: diagnostic
+    lambda: |-
+      if (!id(milton_raw_id_72).has_state()) return {};
+      const float x = id(milton_raw_id_72).state;
+      if (x == 0.0f) return false;
+      if (x == 1.0f) return true;
+      return {};  // Ingen ny status; tidligere status kan blive stående.
+  - platform: template
+    name: Milton Varmtvandsbeholderfunktion (læst status)
+    id: milton_binary_id_73
+    entity_category: diagnostic
+    lambda: |-
+      if (!id(milton_raw_id_73).has_state()) return {};
+      const float x = id(milton_raw_id_73).state;
+      if (x == 0.0f) return false;
+      if (x == 1.0f) return true;
+      return {};  // Ingen ny status; tidligere status kan blive stående.
+  - platform: template
+    name: Milton Genopvarmningsfunktion (læst status)
+    id: milton_binary_id_74
+    entity_category: diagnostic
+    lambda: |-
+      if (!id(milton_raw_id_74).has_state()) return {};
+      const float x = id(milton_raw_id_74).state;
+      if (x == 0.0f) return false;
+      if (x == 1.0f) return true;
+      return {};  // Ingen ny status; tidligere status kan blive stående.
+  - platform: template
+    name: Milton Reduceret værdi varmedrift (læst status)
+    id: milton_binary_id_102
+    entity_category: diagnostic
+    lambda: |-
+      if (!id(milton_raw_id_102).has_state()) return {};
+      const float x = id(milton_raw_id_102).state;
+      if (x == 0.0f) return false;
+      if (x == 1.0f) return true;
+      return {};  // Ingen ny status; tidligere status kan blive stående.
+  - platform: template
+    name: Milton Lydsvag drift (læst status)
+    id: milton_binary_id_111
+    entity_category: diagnostic
+    lambda: |-
+      if (!id(milton_raw_id_111).has_state()) return {};
+      const float x = id(milton_raw_id_111).state;
+      if (x == 0.0f) return false;
+      if (x == 1.0f) return true;
+      return {};  // Ingen ny status; tidligere status kan blive stående.
+  - platform: template
+    name: Milton Vandflow registreret (læst status)
+    id: milton_binary_id_515
+    entity_category: diagnostic
+    lambda: |-
+      if (!id(milton_raw_id_515).has_state()) return {};
+      const float x = id(milton_raw_id_515).state;
+      if (x == 0.0f) return false;
+      if (x == 1.0f) return true;
+      return {};  // Ingen ny status; tidligere status kan blive stående.
+
+# Ikke tilføjet uden registerdokumentation:
+# - Ta (aktuel udetemperatur), TR (rumtemperatur), TV2.
+# - Pumpehastighed, P1/P2, varme-/køletilladelser, ECO-funktion og alarmer.
+# Modbus-adresserne 511-513 er ikke identificeret.
+# Navngiv dem ikke TV2, TR eller Ta uden først at verificere dem.
+# Effekt og energi er estimater fra U*I med effektfaktor 1; aktiv effekt og COP måles ikke.
+# -990 filtreres kun i fysiske temperatursensorer. Alle rådata bevares.
+# 65535/49200 i tidsregistre afkodes IKKE som tid eller fejl uden dokumentation.
+
+# ============================================================================
+# S1 og S11: 0 = fra, 1 = til
+switch:
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton Varmekurve VK1
+    id: milton_heating_curve_enable
+    address: 30
+    register_type: holding
+    bitmask: 1
+    restore_mode: DISABLED
+    use_write_multiple: false
+    entity_category: config
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton Varmepumpe til fra
+    id: milton_heatpump_enable
+    address: 0
+    register_type: holding
+    bitmask: 1
+    restore_mode: DISABLED
+    use_write_multiple: false
+    entity_category: config
+
+# ============================================================================
+# T1/T2/T3/K1: hele grader; manuelt valgte betjeningsgraenser
+number:
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton Sætpunkt brugsvand
+    id: milton_dhw_setpoint
+    address: 64
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: °C
+    min_value: 40
+    max_value: 60
+    step: 1
+    mode: box
+    entity_category: config
+    use_write_multiple: false
+    write_lambda: |-
+      if (!std::isfinite(x) || x < 40.0f || x > 60.0f || std::floor(x) != x) {
+        ESP_LOGW("milton_control", "Afviser ugyldigt saetpunkt: %.2f", x);
+        return {};
+      }
+      return x;  // Hele grader, faktor 1. Kontroller efterfoelgende readback.
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton Sætpunkt varme uden varmekurve
+    id: milton_heating_setpoint
+    address: 44
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: °C
+    min_value: 20
+    max_value: 45
+    step: 1
+    mode: box
+    entity_category: config
+    use_write_multiple: false
+    write_lambda: |-
+      if (!std::isfinite(x) || x < 20.0f || x > 45.0f || std::floor(x) != x) {
+        ESP_LOGW("milton_control", "Afviser ugyldigt saetpunkt: %.2f", x);
+        return {};
+      }
+      return x;  // Hele grader, faktor 1. Kontroller efterfoelgende readback.
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton Sætpunkt genopvarmning
+    id: milton_reheat_setpoint
+    address: 74
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: °C
+    min_value: 40
+    max_value: 60
+    step: 1
+    mode: box
+    entity_category: config
+    use_write_multiple: false
+    write_lambda: |-
+      if (!std::isfinite(x) || x < 40.0f || x > 60.0f || std::floor(x) != x) {
+        ESP_LOGW("milton_control", "Afviser ugyldigt saetpunkt: %.2f", x);
+        return {};
+      }
+      return x;  // Hele grader, faktor 1. Kontroller efterfoelgende readback.
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton Varmekurve VK1 vandtemperatur punkt 1
+    id: milton_curve_water_point_1
+    address: 36
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: °C
+    min_value: 20
+    max_value: 45
+    step: 1
+    mode: box
+    entity_category: config
+    use_write_multiple: false
+    write_lambda: |-
+      if (!std::isfinite(x) || x < 20.0f || x > 45.0f || std::floor(x) != x) {
+        ESP_LOGW("milton_control", "Afviser ugyldigt saetpunkt: %.2f", x);
+        return {};
+      }
+      return x;  // Hele grader, faktor 1. Kontroller efterfoelgende readback.
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton Varmekurve VK1 vandtemperatur punkt 2
+    id: milton_curve_water_point_2
+    address: 37
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: °C
+    min_value: 20
+    max_value: 45
+    step: 1
+    mode: box
+    entity_category: config
+    use_write_multiple: false
+    write_lambda: |-
+      if (!std::isfinite(x) || x < 20.0f || x > 45.0f || std::floor(x) != x) {
+        ESP_LOGW("milton_control", "Afviser ugyldigt saetpunkt: %.2f", x);
+        return {};
+      }
+      return x;  // Hele grader, faktor 1. Kontroller efterfoelgende readback.
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton Varmekurve VK1 vandtemperatur punkt 3
+    id: milton_curve_water_point_3
+    address: 38
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: °C
+    min_value: 20
+    max_value: 45
+    step: 1
+    mode: box
+    entity_category: config
+    use_write_multiple: false
+    write_lambda: |-
+      if (!std::isfinite(x) || x < 20.0f || x > 45.0f || std::floor(x) != x) {
+        ESP_LOGW("milton_control", "Afviser ugyldigt saetpunkt: %.2f", x);
+        return {};
+      }
+      return x;  // Hele grader, faktor 1. Kontroller efterfoelgende readback.
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton Varmekurve VK1 vandtemperatur punkt 4
+    id: milton_curve_water_point_4
+    address: 39
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: °C
+    min_value: 20
+    max_value: 45
+    step: 1
+    mode: box
+    entity_category: config
+    use_write_multiple: false
+    write_lambda: |-
+      if (!std::isfinite(x) || x < 20.0f || x > 45.0f || std::floor(x) != x) {
+        ESP_LOGW("milton_control", "Afviser ugyldigt saetpunkt: %.2f", x);
+        return {};
+      }
+      return x;  // Hele grader, faktor 1. Kontroller efterfoelgende readback.
+  - platform: modbus_controller
+    modbus_controller_id: milton
+    name: Milton Varmekurve VK1 vandtemperatur punkt 5
+    id: milton_curve_water_point_5
+    address: 40
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: °C
+    min_value: 20
+    max_value: 45
+    step: 1
+    mode: box
+    entity_category: config
+    use_write_multiple: false
+    write_lambda: |-
+      if (!std::isfinite(x) || x < 20.0f || x > 45.0f || std::floor(x) != x) {
+        ESP_LOGW("milton_control", "Afviser ugyldigt saetpunkt: %.2f", x);
+        return {};
+      }
+      return x;  // Hele grader, faktor 1. Kontroller efterfoelgende readback.
+
+# ============================================================================
+# KOMPLET REGISTERTABEL - KORRIGEREDE ADRESSER OG ENHEDER
+# ============================================================================
+# Adressen er Modbus-registerets 0-baserede decimaladresse.
+# Alle registre læses med FC03: holding, slave 1, 19200 baud, 8N1.
+# Type angiver fortolkning: U16 er unsigned, S16 er signed. Råsensorer bruger U_WORD.
+# Faktor omregner registerværdien til den angivne enhed.
+# Betjening viser, hvad denne konfiguration eksponerer. Det bekræfter ikke skriverettigheder.
+# En streg betyder kun, at værdien ikke kan skrives fra denne konfiguration.
+# Spørgsmålstegn markerer en uafklaret fortolkning eller enhed.
+# Faktoren 0.1 for tryk og strøm er bekræftet på det testede anlæg.
+# Versionsnumre og tidskoder afkodes ikke og har ingen fysisk enhed.
+# Temperaturværdien -990 (U16=64546) vises som NAN i temperatursensorerne.
+# Råsensorerne bevarer sentinelværdier og specialkoder, herunder 65535 og 49200.
+# Aktuel Ta, TR, TV2, pumpehastigheder og alarmer har ingen verificeret adresse.
+# Navnene 1h, 4h og 24h for udetemperaturernes middelværdier følger kildetabellen.
+# De præcise beregningsvinduer er ikke verificeret uafhængigt.
+#
+# Adr. | Beskrivelse | Type | Faktor | Enhed | Betjening | Bemærkning
+# 0 | Varmepumpe tilstand | U16 | 1 | — | S11 switch | 0/1 ifølge tabel; kun tilstand 1 er observeret i ny log
+# 1 | Softwareversion lav blok | U16 | 1 | versionskode | - | Ingen dokumenteret afkodning til versionsstreng
+# 2 | Databaseversion lav blok | U16 | 1 | versionskode | - | Ingen dokumenteret afkodning til versionsstreng
+# 26 | Stopdifferens varme og koeling | S16 | 1 | °C | - | Hele grader/minutter understøttet af log og panel
+# 27 | Genstartdifferens varme og koeling | S16 | 1 | °C | - | Hele grader/minutter understøttet af log og panel
+# 28 | Differens for kompressorreduktion | S16 | 1 | °C | - | Hele grader/minutter understøttet af log og panel
+# 29 | Saetpunkt koeling | S16 | 1 | °C | - | Hele grader/minutter understøttet af log og panel
+# 30 | Varmekurve VK1 aktiveret | U16 | 1 | — | S1 switch | 0=fra, 1=til
+# 31 | Varmekurve VK1 udetemperatur punkt 1 | S16 | 1 | °C | - | Hele grader/minutter understøttet af log og panel
+# 32 | Varmekurve VK1 udetemperatur punkt 2 | S16 | 1 | °C | - | Hele grader/minutter understøttet af log og panel
+# 33 | Varmekurve VK1 udetemperatur punkt 3 | S16 | 1 | °C | - | Hele grader/minutter understøttet af log og panel
+# 34 | Varmekurve VK1 udetemperatur punkt 4 | S16 | 1 | °C | - | Hele grader/minutter understøttet af log og panel
+# 35 | Varmekurve VK1 udetemperatur punkt 5 | S16 | 1 | °C | - | Hele grader/minutter understøttet af log og panel
+# 36 | Varmekurve VK1 vandtemperatur punkt 1 | S16 | 1 | °C | K1 number | Hele grader/minutter understøttet af log og panel
+# 37 | Varmekurve VK1 vandtemperatur punkt 2 | S16 | 1 | °C | K1 number | Hele grader/minutter understøttet af log og panel
+# 38 | Varmekurve VK1 vandtemperatur punkt 3 | S16 | 1 | °C | K1 number | Hele grader/minutter understøttet af log og panel
+# 39 | Varmekurve VK1 vandtemperatur punkt 4 | S16 | 1 | °C | K1 number | Hele grader/minutter understøttet af log og panel
+# 40 | Varmekurve VK1 vandtemperatur punkt 5 | S16 | 1 | °C | K1 number | Hele grader/minutter understøttet af log og panel
+# 41 | Rumtemperaturens indflydelse | U16 | 1 | — | - | 0=fra, 1=til
+# 42 | Ideal rumtemperatur opvarmning | S16 | 1 | °C | - | Hele grader/minutter understøttet af log og panel
+# 43 | Ideal rumtemperatur koeling | S16 | 1 | °C | - | Hele grader/minutter understøttet af log og panel
+# 44 | Saetpunkt varme uden varmekurve | S16 | 1 | °C | T2 number | Hele grader/minutter understøttet af log og panel
+# 45 | Maksimal fremløbstemperatur | S16 | 1 | °C | - | Hele grader/minutter understøttet af log og panel
+# 46 | Minimal fremløbstemperatur | S16 | 1 | °C | - | Hele grader/minutter understøttet af log og panel
+# 47 | Legionellafunktion | U16 | 1 | — | - | 0=fra, 1=til
+# 48 | Legionellainterval | U16 | 1 | d | - | 0 observeret med legionellafunktion fra; betydning af 0 uafklaret
+# 49 | Legionellasaetpunkt | S16 | 1 | °C | - | Betegnelse/enhed fra kildetabel; ikke alle verificeret
+# 50 | Legionellavarighed | U16 | 1 | min | - | Betegnelse/enhed fra kildetabel; ikke alle verificeret
+# 51 | Legionella sluttid raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 52 | Ferieindstilling | U16 | 1 | — | - | 0=fra, 1=til
+# 53 | Brugsvandsreduktion ferie | S16 | 1 | °C | - | Betegnelse/enhed fra kildetabel; ikke alle verificeret
+# 54 | Systemtemperaturreduktion ferie | S16 | 1 | °C | - | Betegnelse/enhed fra kildetabel; ikke alle verificeret
+# 61 | Startfaktor ekstern varmekilde | S16 | 1? | ? | - | Startfaktor: 290 observeret; fysisk betydning/skala uafklaret
+# 62 | Laeseinterval brugsvandstemperatur | U16 | 1? | min (?) | - | 50 observeret; enhed/betydning ikke panelverificeret
+# 64 | Saetpunkt brugsvand | S16 | 1 | °C | T1 number | Hele grader/minutter understøttet af log og panel
+# 65 | Differens brugsvand | S16 | 1 | °C | - | Hele grader/minutter understøttet af log og panel
+# 66 | Prioritetsskift brugsvand | U16 | 1 | — | - | 0=fra, 1=til
+# 67 | Udetemperatur for vekslende prioritet | S16 | 1 | °C | - | Hele grader/minutter understøttet af log og panel
+# 68 | Minimum ladetid brugsvand | U16 | 1 | min | - | Hele grader/minutter understøttet af log og panel
+# 69 | Maksimum ladetid brugsvand | U16 | 1 | min | - | Hele grader/minutter understøttet af log og panel
+# 70 | Tilladt systemtemperaturvariation | S16 | 1 | °C | - | Hele grader/minutter understøttet af log og panel
+# 71 | Vekslende prioritet brugsvandsbackup | U16 | 1 | — | - | 0=fra, 1=til
+# 72 | Varmtvandsbeholderfunktion | U16 | 1 | — | - | 0=fra, 1=til
+# 73 | Genopvarmningsfunktion | U16 | 1 | — | - | 0=fra, 1=til
+# 74 | Saetpunkt genopvarmning | S16 | 1 | °C | T3 number | Hele grader/minutter understøttet af log og panel
+# 75 | Startdifferens genopvarmning | S16 | 1 | °C | - | Hele grader/minutter understøttet af log og panel
+# 76 | Brugsvandsstart soendag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 77 | Brugsvandsstart mandag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 78 | Brugsvandsstart tirsdag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 79 | Brugsvandsstart onsdag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 80 | Brugsvandsstart torsdag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 81 | Brugsvandsstart fredag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 82 | Brugsvandsstart loerdag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 83 | Genopvarmningsstart soendag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 84 | Genopvarmningsstart mandag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 85 | Genopvarmningsstart tirsdag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 86 | Genopvarmningsstart onsdag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 87 | Genopvarmningsstart torsdag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 88 | Genopvarmningsstart fredag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 89 | Genopvarmningsstart loerdag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 101 | Reduceret vaerdi varmedrift | U16 | 1 | — | - | 0=fra, 1=til
+# 102 | Temperaturhaevning eller reduktion | S16 | 1 | °C | - | Betegnelse/enhed fra kildetabel; ikke alle verificeret
+# 103 | Reduceret saetpunkt timer soendag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 104 | Reduceret saetpunkt timer mandag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 105 | Reduceret saetpunkt timer tirsdag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 106 | Reduceret saetpunkt timer onsdag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 107 | Reduceret saetpunkt timer torsdag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 108 | Reduceret saetpunkt timer fredag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 109 | Reduceret saetpunkt timer loerdag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 110 | Lydsvag drift | U16 | 1 | — | - | 0=fra, 1=til
+# 111 | Tilladt temperaturdifference lydsvag drift | S16 | 1 | °C | - | Betegnelse/enhed fra kildetabel; ikke alle verificeret
+# 112 | Natdrift timer soendag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 113 | Natdrift timer mandag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 114 | Natdrift timer tirsdag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 115 | Natdrift timer onsdag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 116 | Natdrift timer torsdag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 117 | Natdrift timer fredag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 118 | Natdrift timer loerdag raakode | U16 | 1 | tidskode (?) | - | Pakket format/specialkoder uafklaret; ingen tidskonvertering
+# 501 | Softwareversion hoej blok | U16 | 1 | versionskode | - | Ingen dokumenteret afkodning til versionsstreng
+# 503 | Databaseversion hoej blok | U16 | 1 | versionskode | - | Ingen dokumenteret afkodning til versionsstreng
+# 505 | Fremløbstemperatur Tuo | S16 | 0.1 | °C | - | Måletemperatur; -990 er ugyldig/ikke aktiv føler
+# 506 | Returtemperatur Tui | S16 | 0.1 | °C | - | Måletemperatur; -990 er ugyldig/ikke aktiv føler
+# 507 | Spiraltemperatur Tup | S16 | 0.1 | °C | - | Måletemperatur; -990 er ugyldig/ikke aktiv føler
+# 508 | Brugsvandstemperatur TW | S16 | 0.1 | °C | - | Måletemperatur; -990 er ugyldig/ikke aktiv føler
+# 509 | Buffertemperatur TC | S16 | 0.1 | °C | - | Måletemperatur; -990 er ugyldig/ikke aktiv føler
+# 510 | Fremløbstemperatur kreds 1 TV1 | S16 | 0.1 | °C | - | Måletemperatur; -990 er ugyldig/ikke aktiv føler
+# 514 | Vandflowstatus | U16 | 1 | — | - | 0=intet flow, 1=flow
+# 515 | Kompressorfrekvens | U16 | 1 | Hz | - | Direkte heltal; 49/55 Hz observeret
+# 516 | Ekspansionsventil aabning | U16 | 1 | råtrin (?) | - | Åbningskode; IKKE bar eller %; enhed ikke dokumenteret
+# 517 | Gennemsnitlig udetemperatur 1 time | S16 | 0.1 | °C | - | Temperaturmiddel; tidsvindue fra tabel, ikke uafhængigt verificeret
+# 518 | Gennemsnitlig udetemperatur 4 timer | S16 | 0.1 | °C | - | Temperaturmiddel; tidsvindue fra tabel, ikke uafhængigt verificeret
+# 519 | Gennemsnitlig udetemperatur 24 timer | S16 | 0.1 | °C | - | Temperaturmiddel; tidsvindue fra tabel, ikke uafhængigt verificeret
+# 521 | Hoejtryk Pd | U16 | 0.1 | bar | - | Skala/enhed bekræftet af anlægsejeren
+# 522 | Lavtryk Ps | U16 | 0.1 | bar | - | Skala/enhed bekræftet af anlægsejeren
+# 523 | Trykgastemperatur Td | S16 | 0.1 | °C | - | Måletemperatur; -990 er ugyldig/ikke aktiv føler
+# 524 | Sugetemperatur Ts | S16 | 0.1 | °C | - | Måletemperatur; -990 er ugyldig/ikke aktiv føler
+# 525 | Udendoers spiraltemperatur Tp | S16 | 0.1 | °C | - | Måletemperatur; -990 er ugyldig/ikke aktiv føler
+# 526 | Ventilator 1 | U16 | 1 | rpm | - | Direkte heltal; ventilator 2 kan være 0
+# 527 | Ventilator 2 | U16 | 1 | rpm | - | Direkte heltal; ventilator 2 kan være 0
+# 528 | Stroem udendoersenhed | U16 | 0.1 | A | - | Skala/enhed bekræftet af anlægsejeren
+# 529 | Spaending | U16 | 1 | V | - | Direkte heltal; 219..221 V observeret
+#
+# Betjeningsgrænser valgt til denne konfiguration; de er ikke fabrikantens grænser:
+# T1, R064 brugsvand: 40-60 °C i trin på 1 °C. T3, R074 genopvarmning: samme grænser.
+# T2, R044 fast varme: 20-45 °C i trin på 1 °C.
+# K1, R036-R040 vandpunkter 1-5: 20-45 °C hver i trin på 1 °C.
+# K1-udepunkterne R031-R035 er kun læsbare.
+# Test først ved at ændre én værdi med 1 °C. Kontrollér panelet og næste råaflæsning,
+# og gendan derefter den ønskede værdi. Test hovedafbryderen sidst; undgå hurtige skift.
+# S11 sender en stopkommando til styringen; den afbryder ikke netforsyningen.
+# Få producenten til at bekræfte S11-adfærd ved stop, start, frostsikring og pumpestyring.
